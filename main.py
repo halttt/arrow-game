@@ -92,6 +92,18 @@ class GameState:
                 return a
         return None
 
+# =====================新增：路径检测函数=====================
+def has_blocker(state, arrow):
+    dc, dr = DIRS[arrow['dir']]
+    c, r = arrow['c'] + dc, arrow['r'] + dr
+    while 0 <= c < state.cols and 0 <= r < state.rows:
+        blocker = state.arrow_at(c, r)
+        if blocker:
+            return blocker
+        c += dc
+        r += dr
+    return None
+
 # =====================绘制函数=====================
 def grid_to_pixel(state, c, r):
     ox = (SCREEN_W - CELL_SIZE * state.cols) // 2
@@ -171,7 +183,7 @@ def screen_to_grid(state, mx, my):
     r = (my - oy) // CELL_SIZE
     return c, r
 
-# =====================点击事件（简易版，无阻挡判断）=====================
+# =====================修改点击逻辑：增加路径阻挡判断=====================
 def handle_click(state, mx, my):
     if state.screen_mode == 'START':
         if state.btn_restart.collidepoint(mx, my):
@@ -185,13 +197,14 @@ def handle_click(state, mx, my):
     arrow = state.arrow_at(c, r)
     if arrow is None:
         return False
-    # 这里暂时没有路径检测，点击直接删掉箭头
-    state.arrows.remove(arrow)
-    if not state.arrows:
-        if state.level_index + 1 < len(LEVELS):
-            state.load_level(state.level_index + 1)
-        else:
-            state.screen_mode = 'WIN'
+    blocker = has_blocker(state, arrow)
+    if blocker is None:
+        state.arrows.remove(arrow)
+        if not state.arrows:
+            if state.level_index + 1 < len(LEVELS):
+                state.load_level(state.level_index + 1)
+            else:
+                state.screen_mode = 'WIN'
     return True
 
 def draw_win_screen(surface, state, mouse_pos):
