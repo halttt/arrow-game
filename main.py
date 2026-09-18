@@ -15,6 +15,7 @@ COLOR_TEXT_DIM  = (120, 120, 120)
 COLOR_BTN       = (70, 130, 180)
 COLOR_BTN_HOVER = (100, 160, 210)
 COLOR_BTN_TEXT  = (255, 255, 255)
+COLOR_SHAKE     = (220, 70, 70)
 
 CELL_SIZE = 80
 GRID_ORIGIN_Y = 180
@@ -68,13 +69,15 @@ LEVELS = [
     },
 ]
 
-# =====================游戏状态=====================
+# =====================游戏状态 新增shake变量=====================
 class GameState:
     def __init__(self):
         self.screen_mode = 'START'
         self.level_index = 0
         self.arrows = []
         self.remaining_misses = 3
+        self.shake_arrow = None
+        self.shake_timer = 0.0
         self.hover_arrow = None
         self.btn_restart = pygame.Rect(SCREEN_W // 2 - 90, SCREEN_H - 110, 180, 56)
     def load_level(self, idx):
@@ -83,6 +86,8 @@ class GameState:
         self.arrows = [{'c': a[0], 'r': a[1], 'dir': a[2]} for a in data['arrows']]
         self.total_arrows = len(self.arrows)
         self.remaining_misses = data['misses']
+        self.shake_arrow = None
+        self.shake_timer = 0.0
         self.hover_arrow = None
         self.cols = data['cols']
         self.rows = data['rows']
@@ -92,7 +97,7 @@ class GameState:
                 return a
         return None
 
-# =====================新增：路径检测函数=====================
+# =====================路径检测函数=====================
 def has_blocker(state, arrow):
     dc, dr = DIRS[arrow['dir']]
     c, r = arrow['c'] + dc, arrow['r'] + dr
@@ -104,13 +109,14 @@ def has_blocker(state, arrow):
         r += dr
     return None
 
-# =====================绘制函数=====================
+# =====================绘制函数，增加shake偏移参数=====================
 def grid_to_pixel(state, c, r):
     ox = (SCREEN_W - CELL_SIZE * state.cols) // 2
     oy = GRID_ORIGIN_Y
     return ox + c * CELL_SIZE + CELL_SIZE // 2, oy + r * CELL_SIZE + CELL_SIZE // 2
 
-def draw_arrow_shape(surface, cx, cy, direction, color):
+def draw_arrow_shape(surface, cx, cy, direction, color, shake_offset):
+    cx += shake_offset
     size = 25
     if direction == 'U':
         pygame.draw.line(surface, color, (cx, cy+size), (cx, cy-size), 4)
@@ -139,14 +145,19 @@ def draw_arrows(surface, state):
         color = COLOR_ARROW
         if state.hover_arrow and state.hover_arrow['c'] == a['c'] and state.hover_arrow['r'] == a['r']:
             color = COLOR_ARROW_HL
-        draw_arrow_shape(surface, cx, cy, a['dir'], color)
+        offset_x = 0
+        if state.shake_arrow and state.shake_arrow['c'] == a['c'] and state.shake_arrow['r'] == a['r']:
+            offset_x = int(math.sin(state.shake_timer * 40) * 8)
+            color = COLOR_SHAKE
+        draw_arrow_shape(surface, cx, cy, a['dir'], color, offset_x)
 
 def draw_hud(surface, state):
     lv_text = FONT_MED.render(f"Level {state.level_index + 1}/{len(LEVELS)}", True, COLOR_TEXT)
     surface.blit(lv_text, (30, 30))
     arr_text = FONT_SMALL.render(f"Arrows: {len(state.arrows)} / {state.total_arrows}", True, COLOR_TEXT)
     surface.blit(arr_text, (SCREEN_W - 250, 38))
-    miss_text = FONT_MED.render(f"Miss left: {state.remaining_misses}", True, COLOR_TEXT)
+    miss_text = FONT_MED.render(f"Miss left: {state.remaining_misses}", True,
+                                COLOR_SHAKE if state.remaining_misses <= 1 else COLOR_TEXT)
     surface.blit(miss_text, (30, 80))
 
 def draw_button(surface, rect, text, mouse_pos):
@@ -166,6 +177,22 @@ def draw_start_screen(surface, state, mouse_pos):
     surface.blit(tip, tip.get_rect(center=(SCREEN_W // 2, 320)))
     draw_button(surface, state.btn_restart, "Start Game", mouse_pos)
 
+def draw_win_screen(surface, state, mouse_pos):
+    surface.fill(COLOR_BG)
+    title = FONT_LARGE.render("You Win!", True, (50, 150, 80))
+    surface.blit(title, title.get_rect(center=(SCREEN_W // 2, 240)))
+    sub = FONT_MED.render("Completed all levels", True, COLOR_TEXT)
+    surface.blit(sub, sub.get_rect(center=(SCREEN_W // 2, 320)))
+    draw_button(surface, state.btn_restart, "Restart", mouse_pos)
+
+def draw_lose_screen(surface, state, mouse_pos):
+    surface.fill(COLOR_BG)
+    title = FONT_LARGE.render("Game Over", True, COLOR_SHAKE)
+    surface.blit(title, title.get_rect(center=(SCREEN_W // 2, 240)))
+    sub = FONT_MED.render(f"Miss limit reached (Level {state.level_index + 1})", True, COLOR_TEXT)
+    surface.blit(sub, sub.get_rect(center=(SCREEN_W // 2, 320)))
+    draw_button(surface, state.btn_restart, "Restart", mouse_pos)
+
 def draw_play_screen(surface, state, mouse_pos):
     surface.fill(COLOR_BG)
     draw_hud(surface, state)
@@ -183,13 +210,17 @@ def screen_to_grid(state, mx, my):
     r = (my - oy) // CELL_SIZE
     return c, r
 
-# =====================修改点击逻辑：增加路径阻挡判断=====================
+# =====================修改点击：阻挡扣失误、触发晃动、失败判断=====================
 def handle_click(state, mx, my):
-    if state.screen_mode == 'START':
+    if state.screen_mode in ('START', 'WIN', 'LOSE'):
         if state.btn_restart.collidepoint(mx, my):
-            state.load_level(0)
-            state.screen_mode = 'PLAY'
-        return True
+            if state.screen_mode == 'START':
+                state.load_level(0)
+                state.screen_mode = 'PLAY'
+            else:
+                state.screen_mode = 'START'
+            return True
+        return False
     cell = screen_to_grid(state, mx, my)
     if cell is None:
         return False
@@ -205,17 +236,15 @@ def handle_click(state, mx, my):
                 state.load_level(state.level_index + 1)
             else:
                 state.screen_mode = 'WIN'
+    else:
+        state.remaining_misses -= 1
+        state.shake_arrow = arrow
+        state.shake_timer = 0.0
+        if state.remaining_misses <= 0:
+            state.screen_mode = 'LOSE'
     return True
 
-def draw_win_screen(surface, state, mouse_pos):
-    surface.fill(COLOR_BG)
-    title = FONT_LARGE.render("You Win!", True, (50, 150, 80))
-    surface.blit(title, title.get_rect(center=(SCREEN_W // 2, 240)))
-    sub = FONT_MED.render("Completed all levels", True, COLOR_TEXT)
-    surface.blit(sub, sub.get_rect(center=(SCREEN_W // 2, 320)))
-    draw_button(surface, state.btn_restart, "Restart", mouse_pos)
-
-# =====================主循环=====================
+# =====================主循环，更新晃动计时器=====================
 def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
@@ -235,6 +264,10 @@ def main():
                 running = False
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 handle_click(state, *event.pos)
+        if state.shake_arrow and state.shake_timer < 0.5:
+            state.shake_timer += dt
+        else:
+            state.shake_arrow = None
         state.hover_arrow = None
         if state.screen_mode == 'PLAY':
             cell = screen_to_grid(state, *mouse_pos)
@@ -246,6 +279,8 @@ def main():
             draw_play_screen(screen, state, mouse_pos)
         elif state.screen_mode == 'WIN':
             draw_win_screen(screen, state, mouse_pos)
+        elif state.screen_mode == 'LOSE':
+            draw_lose_screen(screen, state, mouse_pos)
         pygame.display.flip()
     pygame.quit()
     sys.exit()
